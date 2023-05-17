@@ -1,67 +1,101 @@
+"""
+- converts image to WEBP format and saves to S3 Bucket
+"""
 import sys
-sys.path.insert(1, './PIL')
-from PIL import Image
 import boto3
 from io import BytesIO
+from PIL import Image
+sys.path.insert(1, './PIL')
+
+
+S3_CLIENT = boto3.client('s3')
+
+
+def put_obect_to_s3_bucket(bucket_name, object_key, image_body):
+    """
+    - Upload image to S3 bucket
+    - Args
+        - bucket_name
+            - string
+            - s3 bucket
+        - object_key
+            - string
+            - object key
+            - this is where you add if sub bucket is required 'sub-bucket/image.webp'
+        - image_body
+            - image buffer
+    - Return None
+    """
+    S3_CLIENT.put_object(
+        Bucket=bucket_name,
+        Key=object_key,
+        Body=image_body,
+        ContentType='image/webp',
+        CacheControl='public, max-age=31536000',
+        ACL='public-read'
+    )
+    print('regular image saved...')
 
 
 def lambda_handler(event, context):
-	"""
-		Coverts image to webp to different sizes.
-	"""
+    """
+    - Coverts image to webp to different specific sizes.
+    - Sizes will be the sub bucket
+    """
 
-	#lambda triggered by new image inserted from S3 bucket
-	trigger_bucket = event['Records'][0]['s3']['bucket']['name']
-	image_name = event['Records'][0]['s3']['object']['key']
+    #lambda triggered by new image inserted from S3 bucket
+    trigger_bucket = event['Records'][0]['s3']['bucket']['name']
+    image_name = event['Records'][0]['s3']['object']['key']
 
-	s3 = boto3.client('s3')
-	load_image = s3.get_object(Bucket=trigger_bucket, Key=image_name)
-	image_body = load_image['Body'].read()
-	
-	image = Image.open(BytesIO(image_body)).convert("RGBA")
-	width, height = image.size
+    #load image
+    load_image = S3_CLIENT.get_object(Bucket=trigger_bucket, Key=image_name)
+    image_body = load_image['Body'].read()
 
-	split_name = image_name.split('.')
-	webp_name = split_name[0] + '.webp'
-	try:
-		BUCKET_NAME = 'bucket_name'
-		sizes = [150, 100, 80]
-		for size in sizes:
-			print (size)
-			if width == height:
-				resized_image = image.resize((size,size))
-				squared_image = resized_image
-			else:
-				resize_height_percentage = size / width
-				new_height = int(height * resize_height_percentage)
-				resized_image = image.resize((size,new_height))
+    #open image
+    image = Image.open(BytesIO(image_body)).convert("RGBA")
+    width, height = image.size
 
-				box = (0, 0, size, size)
-				squared_image = resized_image.crop(box)
+    #build file name
+    split_name = image_name.split('.')
+    webp_name = split_name[0] + '.webp'
+    try:
+        bucket_name = 'bucket_name'
+        sizes = [500, 400, 300, 250, 200, 150, 100, 80]
+        for size in sizes:
+            print(size)
+            #resize image
+            if width == height:
+                resized_image = image.resize((size, size))
+                squared_image = resized_image
+            else:
+                resize_height_percentage = size / width
+                new_height = int(height * resize_height_percentage)
+                resized_image = image.resize((size, new_height))
 
-			resize_buffer_image = BytesIO()
-			resized_image.save(resize_buffer_image, 'WEBP')
+                box = (0, 0, size, size)
+                squared_image = resized_image.crop(box)
 
-			squared_buffer_image = BytesIO()
-			squared_image.save(squared_buffer_image, 'WEBP')
+            #save image buffer
+            resize_buffer_image = BytesIO()
+            resized_image.save(resize_buffer_image, 'WEBP')
+            resize_buffer_image.seek(0)
+            reg_object_key = f"reg/{size}x/{webp_name}"
 
-			resize_buffer_image.seek(0)
-			squared_buffer_image.seek(0)
+            #upload regular image
+            put_obect_to_s3_bucket(bucket_name, reg_object_key, resize_buffer_image)
+            print('regular image saved...')
 
-			s3_resource = boto3.resource('s3')
-			reg_object_key = 'reg/' + str(size) + 'x/' + webp_name
-			sqr_object_key = 'sqr/' + str(size) + 'x/' + webp_name
+            #save image buffer
+            squared_buffer_image = BytesIO()
+            squared_image.save(squared_buffer_image, 'WEBP')
+            squared_buffer_image.seek(0)
+            sqr_object_key = f"sqr/{size}x/{webp_name}"
 
-			#regular image converted
-			s3.put_object(Bucket=BUCKET_NAME, Key=reg_object_key, Body=resize_buffer_image, ContentType='image/webp', CacheControl='public, max-age=31536000', ACL='public-read')
-			print ('regular image saved...')
+            #upload squared image converted
+            put_obect_to_s3_bucket(bucket_name, sqr_object_key, squared_buffer_image)
+            print('squared image saved...')
 
-			#sqaured image converted
-			s3.put_object(Bucket=BUCKET_NAME, Key=sqr_object_key, Body=squared_buffer_image, ContentType='image/webp', CacheControl='public, max-age=31536000', ACL='public-read')
-			print ('squared image saved...')
-			print (webp_name)
+        return {'message': 'success'}
 
-		return 'success'
-		
-	except OSError as ose:
-		return ose
+    except OSError as ose:
+        return ose
